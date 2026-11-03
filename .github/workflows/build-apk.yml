@@ -1,0 +1,77 @@
+name: Build NOVA APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "NOVA-v1.5.1-SOURCE.zip"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nova-apk-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify source archive
+        run: |
+          test -f NOVA-v1.5.1-SOURCE.zip
+          unzip -t NOVA-v1.5.1-SOURCE.zip
+
+      - name: Extract Android project
+        run: |
+          mkdir -p "$RUNNER_TEMP/nova-source"
+          unzip -q NOVA-v1.5.1-SOURCE.zip -d "$RUNNER_TEMP/nova-source"
+          test -f "$RUNNER_TEMP/nova-source/android/app/build.gradle.kts"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build debug APK
+        working-directory: ${{ runner.temp }}/nova-source/android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Verify APK and calculate checksum
+        id: apk
+        run: |
+          APK="$RUNNER_TEMP/nova-source/android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          echo "apk_size=$(du -h "$APK" | cut -f1)" >> "$GITHUB_OUTPUT"
+          echo "apk_sha256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Add build summary
+        run: |
+          echo "## NOVA v1.5.1 APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "- APK size: ${{ steps.apk.outputs.apk_size }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SHA-256: ${{ steps.apk.outputs.apk_sha256 }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Signing: GitHub runner's standard debug key (not a Play Store release key)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-v1.5.1-APK
+          path: ${{ runner.temp }}/nova-source/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
